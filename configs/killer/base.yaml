@@ -1,0 +1,58 @@
+# Killer experiment 的 base 配置：
+# 所有客户端只训 1 轮（run_killer 会强制 num_rounds=1）→ 全员基于同一初始全局
+# 模型 W0 产出 delta 集合 → 跨顺序配置严格可比，唯一自由度 = order.mode。
+# 运行: python -m scripts.run_killer --config configs/killer/base.yaml \
+#           --orders random,clustered,alternating,blocked --out runs/killer
+experiment:
+  name: killer_base
+  seed: 42
+  output_dir: runs/killer
+  time_scale: 1.0
+
+model:
+  name: qwen2.5-vl-7b
+  dtype: bf16
+  device: auto
+  lora: {r: 16, alpha: 32, dropout: 0.05, include_visual: false}
+  gradient_checkpointing: true
+
+tasks:
+  vqa:
+    source:
+      type: local_json
+      json_path: data/vqa.json
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 300
+    max_eval: 100
+  ocr:
+    source:
+      type: local_json
+      json_path: data/ocr.json
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 300
+    max_eval: 100
+  caption:
+    source:
+      type: local_json
+      json_path: data/caption.json
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 300
+    max_eval: 100
+
+clients:
+  task_mix: {vqa: 4, ocr: 3, caption: 3}
+  num_rounds: 1            # killer 关键设定（run_killer 也会强制）
+  speed_factor: 0.8
+  net_delay: {dist: lognormal, mu: 0.5, sigma: 0.6}
+  client_lr: 1.0e-4
+  batch_size: 2
+
+server:
+  aggregation: {name: fedbuff, K: 10}   # 会被 run_killer 覆盖为 fixed_order
+  eval_every_batches: 1
+  eval_batch_size: 4
+  gen_eval_samples: 16
+  max_new_tokens: 32

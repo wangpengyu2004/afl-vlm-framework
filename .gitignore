@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# 实验输出与日志（服务器上生成，不入库）
+runs/
+outputs/
+*.log
+
+# 本地数据（LLaVA 格式 json + 图片；按 README 说明在本地/服务器放置）
+data/
+
+# 模型权重
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 环境变量与密钥
+.env
+*.key

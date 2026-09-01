@@ -1,0 +1,20 @@
+# FedAsync 官方式延迟注入（staleness 模式）：延迟以服务器聚合步数 τ 计量
+#   - 客户端提交后不睡眠；服务器把更新持留到版本推进 version_trained_on + τ 才聚合
+#   - staleness_tau: 每轮采样的 τ（整数步）；download_lag: 同步到多旧的版本（下载侧延迟）
+# 配合 staleness_weighted 聚合（α^τ 降权）即还原经典 FedAsync 设定；
+# 配合 fedbuff 则是"τ 注入 + 缓冲聚合"，可单独考察到达模式对顺序构成的影响。
+# 运行: python -m scripts.run_train --config configs/qwen7b_staleness.yaml
+base: qwen7b_local.yaml
+
+experiment:
+  name: qwen7b_staleness
+  output_dir: runs/qwen7b_staleness
+
+clients:
+  delay_mode: staleness
+  staleness_tau: {dist: uniform_int, low: 1, high: 5}   # τ ~ U{1..5} 聚合步
+  download_lag: {dist: uniform_int, low: 0, high: 2}    # 训练时落后最新版 0..2 步
+  # staleness 模式下 net_delay 不生效；task_profiles 可按任务改 τ/速度
+
+server:
+  aggregation: {name: staleness_weighted, K: 4, staleness_lambda: 0.3, min_weight: 0.1}

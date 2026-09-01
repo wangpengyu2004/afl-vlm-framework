@@ -1,0 +1,5 @@
+# 顺序: 各任务轮转交错（最大化任务交替）
+base: base.yaml
+experiment: {name: killer_alternating, output_dir: runs/killer/alternating}
+server:
+  aggregation: {name: fixed_order, batch_size: 10, order: {mode: alternating}}

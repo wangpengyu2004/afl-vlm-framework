@@ -1,0 +1,11 @@
+torch>=2.4.0
+transformers>=4.51.0
+accelerate>=0.33.0
+peft>=0.14.0
+datasets>=2.20.0
+pillow>=10.0.0
+pyyaml>=6.0
+numpy
+tqdm
+qwen-vl-utils   # Qwen2.5-VL 官方工具（预留视频输入时需要）
+matplotlib      # 仅 analyze_logs --plot 需要

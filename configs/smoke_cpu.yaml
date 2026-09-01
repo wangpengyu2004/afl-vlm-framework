@@ -1,0 +1,34 @@
+# CPU 冒烟测试：tiny_mock + 合成数据，秒级跑通全链路
+# 运行: python -m scripts.run_train --config configs/smoke_cpu.yaml
+experiment:
+  name: smoke_cpu
+  seed: 42
+  output_dir: runs/smoke
+  time_scale: 0.1          # 延迟睡眠 ×0.1，冒烟时加快
+
+model:
+  name: tiny_mock          # 无需下载任何权重
+  dtype: fp32
+  device: cpu
+
+tasks:
+  taskA:
+    source: {type: synthetic, num_samples: 64, num_classes: 4}
+    eval_ratio: 0.15
+  taskB:
+    source: {type: synthetic, num_samples: 64, num_classes: 2}
+    eval_ratio: 0.15
+
+clients:
+  task_mix: {taskA: 2, taskB: 2}
+  num_rounds: 3
+  speed_factor: 1.0
+  net_delay: {dist: lognormal, mu: 0.0, sigma: 0.5}
+  client_lr: 0.01
+  batch_size: 4
+
+server:
+  aggregation: {name: fedbuff, K: 2}
+  eval_every_batches: 2
+  eval_batch_size: 4
+  gen_eval_samples: 0      # tiny 无可解码词表，只算 loss

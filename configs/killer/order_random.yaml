@@ -1,0 +1,6 @@
+# 顺序: 带种子随机（对照条件）——也可直接
+#   python -m scripts.run_train --config configs/killer/order_random.yaml
+base: base.yaml
+experiment: {name: killer_random, output_dir: runs/killer/random}
+server:
+  aggregation: {name: fixed_order, batch_size: 10, order: {mode: random, seed: 42}}

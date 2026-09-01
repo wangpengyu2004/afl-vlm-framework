@@ -1,0 +1,23 @@
+# 虚拟时钟模式（timing: virtual）：两阶段"计划–执行"的主配置模板
+# 阶段1（秒级、不训练）：虚拟时钟 = start_offset + train_seconds/speed_factor + net_delay
+#   → 离线算出完整调度表（到达顺序/每轮同步版本/施加顺序），config+seed 的纯函数，
+#     严格可复现；卡数、线程竞争对时间线零影响 → 客户端数可超过卡数而不失真
+# 阶段2：真实训练按表回放——客户端同步计划指定版本快照，服务器按计划序施加（delta
+#   未产出就等）。先用 --dry-run 查看调度表
+#
+# train_seconds 标定：先用 wallclock 模式跑一轮，从 arrivals.jsonl 的 train_seconds
+# 字段取每任务最大值；或直接取保守值（≥ 单卡真实单轮耗时）。取小了服务器多等，不出错
+base: qwen7b_local.yaml
+
+experiment:
+  name: qwen7b_virtual
+  output_dir: runs/qwen7b_virtual
+  timing: virtual
+
+clients:
+  # 虚拟单轮训练秒数（全局默认；可被 task_profiles/overrides 按任务/客户端覆盖）
+  train_seconds: 900
+  task_profiles:
+    vqa:     {train_seconds: 600}
+    ocr:     {train_seconds: 1200}    # OCR 慢 → 到达自然靠后（与速度设定一致）
+    caption: {train_seconds: 700}

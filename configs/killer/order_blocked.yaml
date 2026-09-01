@@ -1,0 +1,5 @@
+# 顺序: 按任务名确定性分块（类持续学习 blocked 训练）
+base: base.yaml
+experiment: {name: killer_blocked, output_dir: runs/killer/blocked}
+server:
+  aggregation: {name: fixed_order, batch_size: 10, order: {mode: blocked}}

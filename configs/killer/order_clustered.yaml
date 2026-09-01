@@ -1,0 +1,5 @@
+# 顺序: 同任务连续聚集（论文里的最坏情形：先来的任务整块写入）
+base: base.yaml
+experiment: {name: killer_clustered, output_dir: runs/killer/clustered}
+server:
+  aggregation: {name: fixed_order, batch_size: 10, order: {mode: clustered}}

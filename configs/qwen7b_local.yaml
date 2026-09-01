@@ -1,0 +1,70 @@
+# Qwen2.5-VL-7B + 本地 LLaVA 格式 json（主配置模板）
+# 运行: python -m scripts.run_train --config configs/qwen7b_local.yaml
+experiment:
+  name: qwen7b_local
+  seed: 42
+  output_dir: runs/qwen7b_local
+  time_scale: 1.0
+
+model:
+  name: qwen2.5-vl-7b
+  dtype: bf16
+  device: cuda:0           # auto=用全部可见卡
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    include_visual: false   # 默认只训 LLM 侧 LoRA
+  gradient_checkpointing: true
+
+tasks:
+  vqa:
+    source:
+      type: local_json
+      json_path: data/vqa.json        # LLaVA 格式，见 README
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 2000
+    max_eval: 100
+  ocr:
+    source:
+      type: local_json
+      json_path: data/ocr.json
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 2000
+    max_eval: 100
+  caption:
+    source:
+      type: local_json
+      json_path: data/caption.json
+      image_root: data/images
+    eval_ratio: 0.1
+    max_train: 2000
+    max_eval: 100
+
+clients:
+  task_mix: {vqa: 4, ocr: 3, caption: 3}   # 任务异构客户端（论文设定）
+  num_rounds: 3
+  speed_factor: 0.8
+  net_delay: {dist: lognormal, mu: 0.5, sigma: 0.6}
+  delay_mode: wallclock                    # wallclock（睡眠模拟）/ staleness（τ 步数注入）
+  # 任务相关延迟：同一任务的客户端共享相近算力/网络 → 到达按任务自然聚集
+  # （真实系统的任务-时间相关性；优先级：全局默认 < task_profiles < overrides）
+  task_profiles:
+    vqa:     {speed_factor: 1.0, net_delay: {dist: lognormal, mu: 0.0, sigma: 0.4}}
+    ocr:     {speed_factor: 0.5, net_delay: {dist: lognormal, mu: 0.8, sigma: 0.5}}   # OCR 慢
+    caption: {speed_factor: 0.9, net_delay: {dist: lognormal, mu: 0.5, sigma: 0.5}}
+  client_lr: 1.0e-4
+  batch_size: 2
+  grad_clip: 1.0
+  overrides:
+    - {id: c0, speed_factor: 1.0, start_offset: 0.0}   # 快客户端
+    - {id: c9, speed_factor: 0.4, start_offset: 5.0}   # 慢客户端，晚启动
+
+server:
+  aggregation: {name: fedbuff, K: 4, server_lr: 1.0}
+  eval_every_batches: 3
+  eval_batch_size: 4
+  gen_eval_samples: 16
+  max_new_tokens: 32
