@@ -1,0 +1,25 @@
+# V1 臂 B：shuffled-duration（对照臂）——任务→时长的因果链接被打断，
+# 但每任务客户端的时长**边缘分布不变**（600/700/1200 各 3 个，拉丁方排列）。
+# 判据：natural 的到达聚集/能力震荡显著高于本臂（compare_v1 的 block_ratio / amp_ratio ≥ 2）
+base: v1_natural.yaml
+
+experiment:
+  name: v1_shuffled
+  output_dir: runs/v1/shuffled
+
+clients:
+  overrides:
+    # 客户端序：c0-c2=vqa, c3-c5=ocr, c6-c8=caption（task_mix 展开顺序）
+    # 拉丁方：每行（任务组）三个时长各出现一次，全体边缘分布与 natural 相同
+    - {id: c0, train_seconds: 600}
+    - {id: c1, train_seconds: 700}
+    - {id: c2, train_seconds: 1200}
+    - {id: c3, train_seconds: 1200}
+    - {id: c4, train_seconds: 600}
+    - {id: c5, train_seconds: 700}
+    - {id: c6, train_seconds: 700}
+    - {id: c7, train_seconds: 1200}
+    - {id: c8, train_seconds: 600}
+
+server:
+  probe_on_apply: false        # 对照臂不需要 delta 级探针（V2 只用 natural），省一半探针开销

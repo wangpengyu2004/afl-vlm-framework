@@ -1,0 +1,52 @@
+# V0b 标定：7B wallclock 真实训练，测每任务单轮耗时 → 定 v1 的 task_profiles
+# 判据：三任务中位数 train_seconds 的 最快/最慢 比 ≥1.5（拉不开就换数据/调 max_len）
+# 运行: python -m scripts.run_vseries --stage v0
+#       （需先 python -m scripts.prepare_datasets 准备 data/pilot/）
+# 产出: runs/v0/calibration/arrivals.jsonl 的 train_seconds 字段（run_vseries 自动汇总，
+#       打印建议的 task_profiles）
+base: qwen7b_local.yaml
+
+experiment:
+  name: v0_calibration
+  output_dir: runs/v0/calibration
+  timing: wallclock            # 真实耗时直接进 arrivals.jsonl 的 train_seconds
+
+tasks:
+  vqa:
+    source:
+      type: local_json
+      json_path: data/pilot/vqa.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 2000            # 标定只测耗时，训练量取小
+    max_eval: 64
+  ocr:
+    source:
+      type: local_json
+      json_path: data/pilot/ocr.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 2000
+    max_eval: 64
+  caption:
+    source:
+      type: local_json
+      json_path: data/pilot/caption.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 2000
+    max_eval: 64
+
+clients:
+  task_mix: {vqa: 3, ocr: 3, caption: 3}
+  num_rounds: 2
+  speed_factor: 1.0            # 关键：1.0 → arrivals 里记的就是真实耗时
+  net_delay: {dist: fixed, value: 0}   # 隔离训练耗时，不要网络噪声
+  data_partition: disjoint     # Pilot 协议：任务内互斥子集
+  client_lr: 1.0e-4
+  batch_size: 2
+
+server:
+  aggregation: {name: fedbuff, K: 4}
+  eval_every_batches: 0        # 标定不做评估，省时间
+  gen_eval_samples: 0

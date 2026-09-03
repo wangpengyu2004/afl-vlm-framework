@@ -113,6 +113,7 @@ class ClientOverride:
     staleness_tau: Optional[DelayConfig] = None
     download_lag: Optional[DelayConfig] = None
     train_seconds: Optional[float] = None
+    prox_mu: Optional[float] = None
 
 
 @dataclass
@@ -152,6 +153,13 @@ class ClientsConfig:
     client_lr: float = 1e-4
     batch_size: int = 2
     grad_clip: float = 1.0
+    # FedProx 近端系数（0=关闭；>0 时本地损失加 μ/2·‖θ−θ_global‖²）
+    prox_mu: float = 0.0
+    # 任务内训练数据的客户端划分：
+    #   shared  = 同任务全部客户端共用同一份训练集（旧行为）
+    #   disjoint= 每个数据集随机均分成 n_clients 份、每客户端一份
+    #             （Pilot/FedMIT 的划分协议；种子来自 experiment.seed，可复现）
+    data_partition: str = "shared"
     overrides: list[ClientOverride] = field(default_factory=list)
 
     def expand(self) -> list[dict]:
@@ -176,6 +184,7 @@ class ClientsConfig:
             "client_lr": self.client_lr,
             "batch_size": self.batch_size,
             "grad_clip": self.grad_clip,
+            "prox_mu": self.prox_mu,
         }
         out = []
         for i, c in enumerate(clients):
@@ -190,7 +199,7 @@ class ClientsConfig:
                 if c["id"] == ov.id:
                     for k in ("task", "speed_factor", "start_offset", "net_delay",
                               "num_rounds", "delay_mode", "staleness_tau", "download_lag",
-                              "train_seconds"):
+                              "train_seconds", "prox_mu"):
                         v = getattr(ov, k)
                         if v is not None:
                             c[k] = v
@@ -203,11 +212,16 @@ class ClientsConfig:
 @dataclass
 class AggregationConfig:
     name: str = "fedbuff"
-    K: int = 4                            # fedbuff 缓冲大小
+    K: int = 4                            # fedbuff/staleness_weighted 缓冲大小
     server_lr: float = 1.0                # 全局更新步长（乘在 delta 上）
-    # staleness_weighted
+    # staleness_weighted / fedasync
     staleness_lambda: float = 0.3
     min_weight: float = 0.1
+    # fedcompass（时间变化 staleness 阈值，单位见 fedcompass.py 文档）
+    theta0: float = 1.0
+    theta_growth: float = 0.0025
+    theta_max: float = 6.0
+    min_count: int = 3
     # fixed_order（killer experiment）
     batch_size: int = 8                   # 攒够多少个更新触发一次聚合
     order: dict = field(default_factory=lambda: {"mode": "random", "seed": 0})
@@ -217,9 +231,14 @@ class AggregationConfig:
 class ServerConfig:
     aggregation: AggregationConfig = field(default_factory=AggregationConfig)
     eval_every_batches: int = 5           # 每 N 个聚合批次触发一次分任务评估（0=关闭）
+    gen_every_batches: int = 0            # 生成评估的独立频率（0=跟随 eval_every_batches）
     eval_batch_size: int = 4
     gen_eval_samples: int = 8             # 每任务做生成匹配评估的样本数（0=只算 loss）
     max_new_tokens: int = 32
+    # I3 插桩：每施加一个 delta 前后各测一次分任务 probe loss → delta_probes.jsonl
+    probe_on_apply: bool = False
+    probe_manifest: Optional[str] = None  # 探针集索引清单（prepare_datasets 产出）
+    probe_n: int = 128                    # 无 manifest 时的回退：取 eval 集前 N 个样本
 
 
 @dataclass
@@ -297,19 +316,21 @@ def required_history(cfg: ExperimentConfig) -> int:
     return mx + 2 if mx > 0 else 0
 
 
+def _load_raw(path: str) -> dict:
+    """读 YAML 并递归解析 base: 继承链（dict 深合并，子文件优先）。"""
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if raw.get("base"):
+        base_path = os.path.join(os.path.dirname(os.path.abspath(path)), raw["base"])
+        raw = _deep_merge(_load_raw(base_path), raw)
+    raw.pop("base", None)
+    return raw
+
+
 def load_config(path: str) -> ExperimentConfig:
     import os
 
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
-
-    # 支持配置继承：base: 其他.yaml（先载 base，再被本文件覆盖，dict 深合并）
-    if raw.get("base"):
-        base_path = os.path.join(os.path.dirname(os.path.abspath(path)), raw["base"])
-        with open(base_path, "r", encoding="utf-8") as f:
-            base_raw = yaml.safe_load(f) or {}
-        raw = _deep_merge(base_raw, raw)
-    raw.pop("base", None)
+    raw = _load_raw(path)
 
     exp = raw.get("experiment") or {}
     model = raw.get("model") or {}
@@ -367,7 +388,8 @@ def validate_config(cfg: ExperimentConfig) -> None:
         raise ValueError(f"task_mix 引用了未定义的任务: {missing}（已定义: {list(cfg.tasks)}）")
     if mix_total <= 0:
         raise ValueError("task_mix 的客户端总数必须 > 0")
-    known_agg = {"immediate_fifo", "fedbuff", "staleness_weighted", "fixed_order"}
+    known_agg = {"immediate_fifo", "fedbuff", "staleness_weighted",
+                 "fedasync", "fedcompass", "sync_avg", "fixed_order"}
     if cfg.server.aggregation.name not in known_agg:
         raise ValueError(f"未知聚合策略 {cfg.server.aggregation.name}，可选: {sorted(known_agg)}")
     known_models = {"qwen2.5-vl-7b", "qwen2.5-vl-3b", "tiny_mock"}
@@ -376,6 +398,8 @@ def validate_config(cfg: ExperimentConfig) -> None:
     known_dists = {"fixed", "uniform", "uniform_int", "lognormal", "exponential"}
     if cfg.clients.delay_mode not in {"wallclock", "staleness"}:
         raise ValueError(f"未知 delay_mode {cfg.clients.delay_mode}，可选: wallclock / staleness")
+    if cfg.clients.data_partition not in {"shared", "disjoint"}:
+        raise ValueError(f"未知 data_partition {cfg.clients.data_partition}，可选: shared / disjoint")
     for fname, d in (("net_delay", cfg.clients.net_delay),
                      ("staleness_tau", cfg.clients.staleness_tau),
                      ("download_lag", cfg.clients.download_lag)):

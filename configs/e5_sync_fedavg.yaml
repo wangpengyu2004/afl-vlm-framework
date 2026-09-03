@@ -1,0 +1,12 @@
+# E5-6：sync_avg —— 同步 FedAvg 屏障锚（攒齐 9 客户端各至少一条才整批平均）
+# 同步上界参照：把异步性整个关掉后任务震荡还剩多少
+base: e1_natural.yaml
+
+experiment:
+  name: e5_sync_fedavg
+  output_dir: runs/e5/sync_fedavg
+
+server:
+  aggregation:
+    name: sync_avg
+    server_lr: 1.0

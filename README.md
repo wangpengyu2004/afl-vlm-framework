@@ -4,6 +4,11 @@
 聚合顺序（而非陈旧度）决定任务知识写入全局模型的次序**——age-based 聚合只能
 re-weight、不能 re-order（详见 `related-work-audit.md`）。
 
+Benchmark 锚定 **Pilot/FedMIT（AAAI-25, arXiv:2501.13985）** 的任务轴：9 客户端
+3/3/3 任务异构（GQA / OCR-VQA / COCO Caption，每任务 3 客户端持互斥子集）；
+时间轴来自本框架（五个正交延迟/顺序旋钮）。实验体系：V0–V3 前置验证 →
+E1 master run → E2/E3 机制分析 → E5 baseline 矩阵，见「实验流程总览」。
+
 本框架把"聚合顺序"做成服务器侧的显式可控变量：
 
 ```
@@ -25,22 +30,35 @@ re-weight、不能 re-order（详见 `related-work-audit.md`）。
 
 ```
 afl_vlm/
-  config.py            配置与校验（支持 base: 继承）
+  config.py            配置与校验（支持 base: 递归继承）
   planner.py           虚拟时钟调度器（timing: virtual 的阶段1：离线生成调度表）
-  server.py            AsyncServer（到达→策略→顺序化聚合；virtual 模式=计划回放器）
-  client.py            ClientThread（本地 LoRA SFT + 延迟模拟 / 按计划同步指定版本）
+  server.py            AsyncServer（到达→策略→顺序化聚合；virtual 模式=计划回放器；
+                       I3 delta 级探针插桩 probe_on_apply）
+  client.py            ClientThread（本地 LoRA SFT + 延迟模拟 / 按计划同步指定版本；
+                       FedProx 近端项 prox_mu）
   device_pool.py       设备解析/租借
   logging_utils.py     JSONL 日志
-  aggregation/         策略: immediate_fifo / fedbuff / staleness_weighted / fixed_order
+  aggregation/         策略: immediate_fifo / fedbuff / staleness_weighted /
+                       fedasync / fedcompass / sync_avg / fixed_order
   models/              Qwen2.5-VL 适配器 + tiny_mock（CPU 冒烟）+ 共享模型管理器
-  data/                任务注册表: local_json / hf_hub / synthetic
-  evaluation/          分任务 eval + 遗忘分析
+  data/                任务注册表: local_json / hf_hub / synthetic；
+                       client_view() 任务内互斥切分（Pilot 协议 data_partition: disjoint）
+  evaluation/          分任务 eval + 遗忘分析 + 探针集（probe manifest 对齐）
 scripts/
   run_train.py         主入口
-  run_killer.py        killer experiment 驱动
+  prepare_datasets.py  Pilot 协议三任务数据准备（GQA/OCR-VQA/COCO → LLaVA json + 探针清单）
+  run_vseries.py       V0–V3 前置实验一键驱动（确定性/标定/到达结构性/矢量staleness/killer）
+  run_e5.py            E5 baseline 矩阵一键驱动（9 策略 × 多种子 → 汇总表）
+  run_killer.py        killer experiment 驱动（同 delta 集合、只变施加顺序）
   analyze_logs.py      日志分析/绘图
-configs/               smoke_cpu / smoke_virtual / qwen7b_local / qwen7b_hub /
-                       qwen7b_staleness / qwen7b_virtual / killer/*
+  analyze_structure.py V1 到达结构性分析（游程置换检验/块长/震荡幅度/遮蔽比）
+  analyze_vector.py    V2 矢量 staleness 分析（CI 与 τ 脱钩/同 τ 不同命/离开期分组）
+configs/
+  v0_smoke / v0_calibration / v1_natural / v1_shuffled / v1_noise
+  e1_natural           E1 master run（= v1_natural 拉长 12 轮）
+  e5_*                 E5 baseline 矩阵 ×9
+  killer/base_tiny / killer/base_pilot（+ 旧版 killer/base、order_*.yaml）
+  smoke_cpu / smoke_virtual / qwen7b_local / qwen7b_hub / qwen7b_staleness / qwen7b_virtual
 ```
 
 ## 服务器部署
@@ -56,8 +74,58 @@ python -m scripts.run_train --config configs/smoke_cpu.yaml
 真模型前先 `--dry-run` 检查实验计划：
 
 ```bash
-python -m scripts.run_train --config configs/qwen7b_local.yaml --dry-run
+python -m scripts.run_train --config configs/v1_natural.yaml --dry-run
 ```
+
+## 实验流程总览（从零到 baseline 矩阵）
+
+```bash
+# ① 数据准备：Pilot 协议三任务（GQA / OCR-VQA / COCO Caption）→ data/pilot/
+#    （HF 仓库 ID 服务器端在线验证，候选失败会打印搜索结果 + 支持 --dataset-id-* 指定）
+python -m scripts.prepare_datasets --per-task 12000
+
+# ② V 系列前置验证（V0 确定性+标定 → V1 到达结构性 → V2 矢量 staleness → V3 killer）
+python -m scripts.run_vseries --stage all            # 无 GPU 先跑机制链: --skip-calibration
+python -m scripts.run_vseries --stage v1 --seeds 42,43 --noise --plot
+
+# ③ E1 master run（= v1_natural 拉长 12 轮，108 条更新）
+python -m scripts.run_train --config configs/e1_natural.yaml
+
+# ④ E5 baseline 矩阵：9 策略 × 3 种子 → runs/e5_summary.csv
+python -m scripts.run_e5 --seeds 42,43,44
+```
+
+各阶段产出 `runs/<stage>_report.json`（go/no-go 判定）与 `runs/e5_summary.csv`
+（final 能力 / 稳态震荡 amp / 慢任务权重占比 / 平均 staleness）。
+
+## V 系列前置实验（go/no-go）
+
+| 阶段 | 问题 | 判据 | 数据 |
+|---|---|---|---|
+| **V0a** smoke | 调度表确定性 | 同 config+seed 两次 `plan.json` 逐字节一致 | tiny_mock ×2 |
+| **V0b** 标定 | 任务时长差真实存在 | 三任务单轮耗时 最快/最慢 ≥1.5，产出建议 task_profiles | 7B wallclock 2 轮 |
+| **V1** 到达结构性 | 任务→时长 → 到按任务成块，能力震荡 | 游程置换 p<0.05、块长比 ≥2、震荡幅度比 ≥2、遮蔽比 M≪1 | natural vs shuffled（拉丁方）(± noise 臂) |
+| **V2** 矢量 staleness | CI（纠偏指数）与 τ 脱钩、与离开期漂移方向挂钩 | Spearman(τ,\|CI\|)≈0 而 Spearman(‖d‖,\|CI\|)>0；同 τ 反向对；离开期分组 MW | delta_probes.jsonl |
+| **V3** killer 直接层 | 冻结 delta、只变施加顺序 → 中途态发散 | 中途态离散 / 终点重合残差 ≥10（纯加法理论下终点应重合） | run_killer × 3 顺序 |
+
+臂 B（`v1_shuffled`）用拉丁方把 600/700/1200s 打乱到 9 个客户端、边缘分布不变、
+打断"任务→时长"因果链接——natural 与 shuffled 的全部差异只能来自到达结构。
+
+## E5 baseline 矩阵（只换聚合，其余全同 e1_natural）
+
+| 配置 | 策略 | 对应文献 |
+|---|---|---|
+| `e5_immediate_fifo` | 到达即施加、等权（零干预异步） | FedAsync 等权形态 |
+| `e5_fedasync` / `e5_fedasync_l05` | staleness 降权 exp(−λτ)，λ=0.3/0.5 | FedAsync (1903.03934) |
+| `e5_fedbuff_k4` | 缓冲 K=4 | FedBuff (2106.06639) |
+| `e5_fedcompass` | 时间变化 staleness 阈值 θ(t) 准入 | FedCompass (2309.14675) |
+| `e5_sync_fedavg` | 同步屏障锚（等齐 9 客户端） | FedAvg |
+| `e5_sync_fedprox` | 同步 + 客户端近端项 μ=0.01 | FedProx |
+| `e5_random_order` | 同批等权、批内随机序（fixed_order） | 顺序效应对照 |
+| `e5_fullmix` | K=9 全混合 | ACE 式任务混合 |
+
+核心论点：以上全部是**标量**干预（时间/缓冲/同步），都压不住**任务方向性**错位
+——E5 的 amp_ocr / wshare_ocr 列就是证据表。
 
 ## 三步走
 
@@ -66,6 +134,25 @@ python -m scripts.run_train --config configs/qwen7b_local.yaml --dry-run
 3. **完整实验**：任务异构客户端 + killer experiment。
 
 ## 数据准备
+
+### Pilot 协议三任务（`scripts/prepare_datasets.py`）
+
+```bash
+python -m scripts.prepare_datasets                    # 默认 12000 条/任务 → data/pilot/
+python -m scripts.prepare_datasets --per-task 6000 --only ocr   # 小规模/单任务
+python -m scripts.prepare_datasets --dataset-id-ocr <repo>      # 手动指定 HF 仓库
+```
+
+- 任务源（按候选顺序自动验证可用性，失败时打印 HF 搜索结果）：
+  vqa=`lmms-lab/GQA`、ocr=`HuggingFaceM4/OCR-VQA`（备选 `lmms-lab/OCR-VQA`）、
+  caption=`HuggingFaceM4/COCO`（备选 coco-karpathy 等）；
+- 流式拉取 + 列名自动探测（图片列/问答列，list 型问答逐条展开），落盘 LLaVA 格式
+  `data/pilot/{vqa,ocr,caption}.json` + `data/pilot/images/`；
+- 尾部 10% 作 held-out eval；训练部分由 `data_partition: disjoint` 随机均分给
+  每任务 3 个客户端（互斥子集，种子来自 `experiment.seed`）——照抄 Pilot/FedMIT；
+- 同时产出 `probe_manifest.json`：每任务 128 条探针索引，与运行时
+  `max_eval: 256` 严格对齐（`probe_on_apply` 的 I3 插桩数据源）。
+  **注意**：改配置里的 `max_eval` 时必须同步改 `--max-eval` 重跑准备脚本。
 
 ### local_json（LLaVA 标准格式）
 
@@ -168,9 +255,14 @@ wallclock 模式的时间线由真实线程竞争产生：客户端数 > 卡数�
 | `clients.staleness_tau` | τ 分布：fixed / uniform_int(low,high)，单位 = 聚合步（仅 staleness 模式） |
 | `clients.download_lag` | 下载侧延迟：训练所用版本落后最新版的步数（0=关；自动启用版本历史） |
 | `clients.task_profiles` | 按任务覆盖 speed_factor/net_delay/staleness_tau/download_lag/start_offset |
-| `clients.overrides` | 逐客户端覆盖 task/speed/start_offset/net_delay/num_rounds/delay_mode 等 |
-| `server.aggregation.name` | immediate_fifo / fedbuff / staleness_weighted / fixed_order |
+| `clients.overrides` | 逐客户端覆盖 task/speed/start_offset/net_delay/num_rounds/delay_mode/train_seconds/prox_mu 等 |
+| `clients.data_partition` | `shared` = 同任务客户端共用全量（旧行为）/ `disjoint` = 任务内随机均分互斥子集（Pilot 协议） |
+| `clients.prox_mu` | FedProx 近端系数（>0 时本地损失加 μ/2·‖θ−θ_global‖²） |
+| `server.aggregation.name` | immediate_fifo / fedbuff / staleness_weighted / fedasync / fedcompass / sync_avg / fixed_order |
 | `server.eval_every_batches` | 每 N 个聚合批次做一次分任务 eval（0=关） |
+| `server.gen_every_batches` | 生成评估独立频率（0=跟随 eval_every_batches）——loss 评估每批、生成评估降频 |
+| `server.probe_on_apply` | I3 插桩：每施加一条 delta 前后测三任务探针 loss → `delta_probes.jsonl` |
+| `server.probe_manifest` | 探针索引清单（prepare_datasets 产出）；缺省用 eval 集前 `probe_n` 条 |
 
 ## 聚合策略（研究钩子）
 
@@ -178,18 +270,22 @@ wallclock 模式的时间线由真实线程竞争产生：客户端数 > 卡数�
 
 | 策略 | 顺序 | 权重 | 用途 |
 |---|---|---|---|
-| `immediate_fifo` | 到达序 | 1.0 | 经典 FedAsync 基线 |
-| `fedbuff` | 到达序（攒 K 个） | 1.0 | FedBuff 基线 |
+| `immediate_fifo` | 到达序 | 1.0 | 经典 FedAsync 等权形态（E1/V1 主策略） |
+| `fedbuff` | 到达序（攒 K 个） | 1.0 | FedBuff 基线（E5；K=9 即 fullmix） |
 | `staleness_weighted` | 到达序（攒 K 个） | exp(−λ·staleness) | **re-weighting 天花板**基线 |
-| `fixed_order` | random/clustered/alternating/blocked/explicit | 恒 1.0 | **顺序效应执行器**（killer experiment） |
+| `fedasync` | 到达序（不缓冲，立即逐条） | max(min_w, exp(−λ·staleness)) | FedAsync 标准形态（E5） |
+| `fedcompass` | 阈值准入（staleness ≤ θ(t)），攒够 min_count 整批 | 1.0 | FedCompass 策略层近似（E5） |
+| `sync_avg` | 攒齐全部客户端整批，到达序 | 1.0 | 同步 FedAvg 屏障锚（E5；+prox_mu 即 FedProx） |
+| `fixed_order` | random/clustered/alternating/blocked/explicit | 恒 1.0 | **顺序效应执行器**（killer/V3/E5-random_order） |
 
 新增策略：`aggregation/` 下新文件 → `aggregation/__init__.py` 注册 → `config.py` known_agg 加名字。
 
 ## Killer experiment（顺序 ≠ 年龄 的核心实验）
 
 ```bash
-python -m scripts.run_killer --config configs/killer/base.yaml \
-    --orders random,clustered,alternating,blocked --out runs/killer
+# tiny 快跑版（CPU，秒级）；正式版用 configs/killer/base_pilot.yaml（7B + Pilot 数据）
+python -m scripts.run_killer --config configs/killer/base_tiny.yaml \
+    --orders clustered,alternating,random --out runs/v3/killer
 ```
 
 设计保证跨顺序严格可比：
@@ -213,7 +309,8 @@ python -m scripts.analyze_logs --dir runs/killer/clustered --plot
 |---|---|---|
 | `arrivals.jsonl` | 每次上传 | client/task/round/version_trained_on/t_arrival/net_delay/train_seconds + **tau/hold_until_version/download_lag** + t_submit_real |
 | `aggregations.jsonl` | 每次施加 | **batch/order_index**/staleness/weight/global_version_after/t_apply |
-| `evals.jsonl` | 分任务评估曲线 | tag/task/global_version/eval_loss/match_rate |
+| `evals.jsonl` | 分任务评估曲线 | tag/task/global_version/eval_loss/match_rate（+avg_answer_len 行为场） |
+| `delta_probes.jsonl`（probe_on_apply） | 每条 delta 施加前后的三任务探针 loss（V2/E2 数据源） | client/task/staleness/weight/version_trained_on/version_before/version_after/loss_before/loss_after |
 | `plan.json`（仅 virtual） | 完整调度表（时间线的权威记录） | rounds（每轮 sync_version/虚拟时刻）/ applies（施加顺序/权重/批次）/ arrival_order |
 
 wallclock 模式下 tau=0；staleness 模式下 arrivals 记录提交时刻，
@@ -247,8 +344,9 @@ virtual 模式下 t_arrival/t_apply/train_seconds 均为**虚拟时刻**（计�
    （打印警告）；virtual 模式允许 >1（虚拟时间可压缩）。
 4. 评估租一张空闲卡跑（与其它卡上的训练并行）；全部卡忙时等待。正式实验建议
    `eval_every_batches` 不要太小。virtual 模式下评估不占虚拟时间线（真实侧活动）。
-5. 同任务多客户端共享完整任务数据（无 Dirichlet 切分）；数据量差异通过
-   `max_train` + overrides 后续可加。
+5. 任务内数据划分由 `clients.data_partition` 控制：`shared` = 同任务客户端共用
+   完整任务数据；`disjoint` = 随机均分互斥子集（Pilot 协议，正式实验用这个）。
+   Dirichlet 式非均匀切分后续可加。
 6. staleness 模式下，模拟结束时仍在持留（τ 未到期）的更新会被放行并聚合
    （服务器打印提示）；分析时可用 `aggregations.jsonl` 里偏大的 staleness 值识别。
    virtual 模式的等价放行在计划生成时完成（policy.on_finish）。

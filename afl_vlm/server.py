@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import queue
 import threading
 import time
@@ -64,9 +65,44 @@ class AsyncServer:
         self.w_arrivals = JsonlWriter(f"{out}/arrivals.jsonl")
         self.w_aggs = JsonlWriter(f"{out}/aggregations.jsonl")
         self.w_evals = JsonlWriter(f"{out}/evals.jsonl")
+        # I3 插桩：每个 delta 施加前后的分任务探针（矢量 staleness 的 CI 数据源）
+        self.w_probes = (JsonlWriter(f"{out}/delta_probes.jsonl")
+                         if cfg.server.probe_on_apply else None)
+
+        import json as _json
+        probe_indices: dict = {}
+        if cfg.server.probe_manifest and os.path.exists(cfg.server.probe_manifest):
+            with open(cfg.server.probe_manifest, "r", encoding="utf-8") as f:
+                manifest = _json.load(f)
+            probe_indices = {
+                t: m["indices"] for t, m in manifest.items() if m.get("indices")
+            }
+            print(f"[server] 探针清单已加载: {cfg.server.probe_manifest} "
+                  f"({ {t: len(i) for t, i in probe_indices.items()} })")
 
         from .evaluation.evaluator import Evaluator
-        self.evaluator = Evaluator(cfg, manager, collator, self.w_evals, tasks=tasks)
+        self.evaluator = Evaluator(cfg, manager, collator, self.w_evals, tasks=tasks,
+                                   probe_indices=probe_indices)
+
+    # -- I3：施加前后探针 -------------------------------------------------------
+
+    def _probe_once(self) -> dict[str, float]:
+        """在任一空闲副本上载入当前全局状态，测一遍三任务探针 loss。"""
+        with self.manager.acquire_model() as h:
+            h.adapter.load_trainable_state(self.manager.export_global())
+            return self.evaluator.probe_losses(adapter=h.adapter, device=h.device)
+
+    def _write_probe_row(self, u: UpdateRecord, batch, order_index, staleness,
+                         weight, version_before: int, new_version: int,
+                         t_apply, loss_before: dict, loss_after: dict) -> None:
+        self.w_probes.write({
+            "batch": batch, "order_index": order_index,
+            "client": u.client_id, "task": u.task, "round": u.round,
+            "version_trained_on": u.version_trained_on,
+            "version_before": version_before, "version_after": new_version,
+            "staleness": staleness, "weight": weight, "t_apply": t_apply,
+            "loss_before": loss_before, "loss_after": loss_after,
+        })
 
     # -- 客户端调用 -----------------------------------------------------------
 
@@ -168,9 +204,16 @@ class AsyncServer:
 
     def _apply_planned(self, u: UpdateRecord, pa) -> None:
         """施加计划条目（权重/批次/批内序号全部来自计划，不再询问策略）。"""
-        staleness = self.manager.current_version() - u.version_trained_on
+        loss_before = self._probe_once() if self.w_probes else None
+        version_before = self.manager.current_version()
+        staleness = version_before - u.version_trained_on
         new_version = self.manager.apply_delta(
             u.delta, pa.weight, self.cfg.server.aggregation.server_lr)
+        if self.w_probes:
+            loss_after = self._probe_once()
+            self._write_probe_row(u, pa.batch, pa.order_index, staleness, pa.weight,
+                                  version_before, new_version, pa.t_apply,
+                                  loss_before, loss_after)
         self.w_aggs.write({
             "batch": pa.batch, "order_index": pa.order_index,
             "client": u.client_id, "task": u.task, "round": u.round,
@@ -231,9 +274,16 @@ class AsyncServer:
             return
         applied = set()
         for order_index, (u, weight) in enumerate(ordered):
-            staleness = self.manager.current_version() - u.version_trained_on
+            loss_before = self._probe_once() if self.w_probes else None
+            version_before = self.manager.current_version()
+            staleness = version_before - u.version_trained_on
             new_version = self.manager.apply_delta(
                 u.delta, weight, self.cfg.server.aggregation.server_lr)
+            if self.w_probes:
+                loss_after = self._probe_once()
+                self._write_probe_row(u, self.batch_count, order_index, staleness,
+                                      weight, version_before, new_version,
+                                      time.time(), loss_before, loss_after)
             self.w_aggs.write({
                 "batch": self.batch_count,
                 "order_index": order_index,          # ← 施加顺序（顺序效应核心字段）
@@ -254,14 +304,18 @@ class AsyncServer:
 
     # -- 评估与收尾 ------------------------------------------------------------
 
-    def _run_eval(self, tag: str) -> None:
+    def _run_eval(self, tag: str, force_gen: bool = False) -> None:
+        # 生成评估独立频率：gen_every_batches=0 → 跟随 eval_every_batches
+        gen_every = self.cfg.server.gen_every_batches or self.cfg.server.eval_every_batches
+        include_gen = force_gen or (gen_every <= 1) or (self.batch_count % gen_every == 0)
         with self.manager.acquire_model() as h:
             h.adapter.load_trainable_state(self.manager.export_global())
-            self.evaluator.run_all(tag=tag, adapter=h.adapter, device=h.device)
+            self.evaluator.run_all(tag=tag, adapter=h.adapter, device=h.device,
+                                   include_gen=include_gen)
 
     def _finalize(self) -> dict:
         if self.cfg.server.eval_every_batches:
-            self._run_eval(tag="final")
+            self._run_eval(tag="final", force_gen=True)
         out = ensure_dir(self.cfg.output_dir)
         torch.save(self.manager.export_global(), f"{out}/global_trainable.pt")
         with self.manager.acquire_model() as h:

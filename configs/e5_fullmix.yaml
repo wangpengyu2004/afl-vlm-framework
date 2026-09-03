@@ -1,0 +1,13 @@
+# E5-9：fullmix —— K=9 全混合缓冲（ACE 式"任务间梯度混合"的极端设定）
+# 缓冲拉满 → 每批内三任务混合度最大；与 fedbuff_k4 对比可读出"混合度"的作用
+base: e1_natural.yaml
+
+experiment:
+  name: e5_fullmix
+  output_dir: runs/e5/fullmix
+
+server:
+  aggregation:
+    name: fedbuff
+    K: 9
+    server_lr: 1.0

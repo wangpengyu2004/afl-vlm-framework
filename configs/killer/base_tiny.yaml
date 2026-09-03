@@ -1,0 +1,44 @@
+# killer/base：tiny_mock 合成数据（V3 直接层检验的快跑版）
+# 用法（经 run_killer 包装，--orders 控制唯一自由度）:
+#   python -m scripts.run_killer --config configs/killer/base_tiny.yaml \
+#       --orders clustered,alternating,random --out runs/v3/killer
+# 设计不变量：全员 num_rounds=1、同 seed → delta 集合跨顺序条件逐位一致；
+# 同权重（fixed_order 恒 1.0）→ 纯加法模型下终点状态应跨顺序完全重合
+experiment:
+  name: killer_tiny
+  seed: 42
+  output_dir: runs/killer_tiny
+  timing: wallclock            # run_killer 会让各 order 单独跑，无需虚拟时间线
+
+model:
+  name: tiny_mock
+  dtype: fp32
+  device: cpu
+
+tasks:
+  taskA:
+    source: {type: synthetic, num_samples: 96, num_classes: 4}
+    eval_ratio: 0.15
+  taskB:
+    source: {type: synthetic, num_samples: 96, num_classes: 2}
+    eval_ratio: 0.15
+  taskC:
+    source: {type: synthetic, num_samples: 96, num_classes: 6}
+    eval_ratio: 0.15
+
+clients:
+  task_mix: {taskA: 3, taskB: 3, taskC: 3}
+  num_rounds: 1                # 关键：全员单轮 → 所有 delta 基于同一 W0
+  speed_factor: 1.0
+  net_delay: {dist: fixed, value: 0}
+  data_partition: disjoint     # 客户端数据互斥（同 seed → 跨顺序条件一致）
+  client_lr: 0.01
+  batch_size: 4
+
+server:
+  aggregation: {name: fixed_order, batch_size: 9, order: {mode: random, seed: 42}}  # 由 run_killer 按 --orders 覆写
+  eval_every_batches: 1
+  eval_batch_size: 4
+  gen_eval_samples: 0
+  probe_on_apply: true         # V3 的数据源：每条 delta 施加前后的三任务探针
+  probe_n: 64

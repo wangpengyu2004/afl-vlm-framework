@@ -77,7 +77,7 @@ class ClientThread(threading.Thread):
                     behind=download_lag)
                 h.adapter.load_trainable_state(state)
                 before = h.adapter.trainable_state()
-                self._train_one_round(r, h)
+                self._train_one_round(r, h, anchor=before)
                 after = h.adapter.trainable_state()
             train_seconds = time.time() - t_start
             train_seconds_sim = self._compensate_speed(train_seconds)
@@ -119,7 +119,7 @@ class ClientThread(threading.Thread):
             with self.manager.acquire_model() as h:
                 h.adapter.load_trainable_state(state)
                 before = h.adapter.trainable_state()
-                self._train_one_round(pr.round, h)
+                self._train_one_round(pr.round, h, anchor=before)
                 after = h.adapter.trainable_state()
             delta = {k: after[k] - before[k] for k in after}
             # 整条计划记录原样回传（含计划 seq_no/虚拟时间戳/tau）——服务器的
@@ -128,10 +128,19 @@ class ClientThread(threading.Thread):
 
     # -- 本地训练 --------------------------------------------------------------
 
-    def _train_one_round(self, round_idx: int, h) -> None:
+    def _train_one_round(self, round_idx: int, h, anchor=None) -> None:
+        """anchor：本轮下载到的全局可训练状态（dict）。prox_mu>0 时加 FedProx 近端项
+        μ/2·Σ‖θ−θ_anchor‖²（只对 LoRA 可训练参数，锚搬上设备一次）。"""
         model = h.adapter.model
         params = h.adapter.trainable_params()
         opt = torch.optim.AdamW(params, lr=self.ccfg["client_lr"])
+
+        prox_mu = float(self.ccfg.get("prox_mu") or 0.0)
+        anchor_dev = None
+        if prox_mu > 0 and anchor:
+            dtype = model_dtype_of(model)
+            anchor_dev = {k: v.to(h.device, dtype=dtype) for k, v in anchor.items()}
+            named = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
 
         gen = torch.Generator().manual_seed(
             stable_seed(self.cfg.seed, self.cid, round_idx))
@@ -149,6 +158,12 @@ class ClientThread(threading.Thread):
             batch = move_batch_to(batch, h.device, model_dtype=dtype)
             out = model(**batch)
             loss = out["loss"] if isinstance(out, dict) else out.loss
+            if anchor_dev is not None:
+                prox = None
+                for n, p in named:
+                    diff = p - anchor_dev[n]
+                    prox = diff.pow(2).sum() if prox is None else prox + diff.pow(2).sum()
+                loss = loss + 0.5 * prox_mu * prox
             opt.zero_grad(set_to_none=True)
             loss.backward()
             if self.ccfg.get("grad_clip"):

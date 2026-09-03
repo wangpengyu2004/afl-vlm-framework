@@ -1,0 +1,66 @@
+# killer/base：Pilot 真实数据 + Qwen2.5-VL-7B（V3 的正式版；跑法同 base_tiny）
+#   python -m scripts.run_killer --config configs/killer/base_pilot.yaml \
+#       --orders clustered,alternating,random --out runs/v3/killer_pilot
+# 不变量同 base_tiny：num_rounds=1、同 seed、等权 → 跨顺序只差施加顺序
+experiment:
+  name: killer_pilot
+  seed: 42
+  output_dir: runs/killer_pilot
+  timing: wallclock
+
+model:
+  name: qwen2.5-vl-7b
+  dtype: bf16
+  device: cuda:0
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    include_visual: false
+  gradient_checkpointing: true
+
+tasks:
+  vqa:
+    source:
+      type: local_json
+      json_path: data/pilot/vqa.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256
+  ocr:
+    source:
+      type: local_json
+      json_path: data/pilot/ocr.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256
+  caption:
+    source:
+      type: local_json
+      json_path: data/pilot/caption.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256
+
+clients:
+  task_mix: {vqa: 3, ocr: 3, caption: 3}
+  num_rounds: 1
+  speed_factor: 1.0
+  net_delay: {dist: fixed, value: 0}
+  data_partition: disjoint
+  client_lr: 1.0e-4
+  batch_size: 2
+  grad_clip: 1.0
+
+server:
+  aggregation: {name: fixed_order, batch_size: 9, order: {mode: random, seed: 42}}  # 由 run_killer 按 --orders 覆写
+  eval_every_batches: 1
+  eval_batch_size: 4
+  gen_eval_samples: 0          # killer 只看 loss 型能力，生成评估关掉
+  gen_every_batches: 999       # 中途不做生成评估
+  probe_on_apply: true
+  probe_manifest: data/pilot/probe_manifest.json
+  probe_n: 128

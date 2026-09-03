@@ -1,0 +1,15 @@
+# E5-7：sync + FedProx —— 同步屏障 + 客户端近端项 μ=0.01（Li et al. 2020）
+# 异质性的经典标量修正：约束本地漂移，但对"任务方向性"同样无指向信息
+base: e1_natural.yaml
+
+experiment:
+  name: e5_sync_fedprox
+  output_dir: runs/e5/sync_fedprox
+
+clients:
+  prox_mu: 0.01                # 客户端损失加 μ/2·‖θ−θ_global‖²（client.py 实现）
+
+server:
+  aggregation:
+    name: sync_avg
+    server_lr: 1.0

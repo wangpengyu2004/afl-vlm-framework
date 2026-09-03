@@ -1,0 +1,44 @@
+# V0a 冒烟：tiny_mock 虚拟时钟 ×2 次 → plan.json 逐字节一致（调度表确定性）
+# 运行: python -m scripts.run_vseries --stage v0（或单独
+#       python -m scripts.run_train --config configs/v0_smoke.yaml --out runs/v0/smoke_a）
+experiment:
+  name: v0_smoke
+  seed: 42
+  output_dir: runs/v0/smoke
+  timing: virtual
+
+model:
+  name: tiny_mock
+  dtype: fp32
+  device: cpu
+
+tasks:
+  taskA:
+    source: {type: synthetic, num_samples: 96, num_classes: 4}
+    eval_ratio: 0.15
+  taskB:
+    source: {type: synthetic, num_samples: 96, num_classes: 2}
+    eval_ratio: 0.15
+  taskC:
+    source: {type: synthetic, num_samples: 96, num_classes: 6}
+    eval_ratio: 0.15
+
+clients:
+  task_mix: {taskA: 3, taskB: 3, taskC: 3}   # Pilot/FedMIT 协议 9 客户端 3/3/3
+  num_rounds: 2
+  speed_factor: 1.0
+  net_delay: {dist: fixed, value: 0}         # 冒烟不要随机延迟，突出确定性
+  data_partition: disjoint                   # 任务内互斥子集（Pilot 协议）
+  client_lr: 0.01
+  batch_size: 4
+  train_seconds: 20
+  task_profiles:
+    taskA: {train_seconds: 20}
+    taskB: {train_seconds: 40}                # 拉开时长差 → natural 聚集时间线
+    taskC: {train_seconds: 25}
+
+server:
+  aggregation: {name: immediate_fifo, server_lr: 1.0}
+  eval_every_batches: 2
+  eval_batch_size: 4
+  gen_eval_samples: 0                         # tiny 无可解码词表，只算 loss

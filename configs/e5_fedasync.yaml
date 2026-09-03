@@ -1,0 +1,14 @@
+# E5-2：fedasync —— FedAsync（Xie et al. 2019）staleness 降权 λ=0.3
+# 标量 staleness 干预的代表：只压时间陈旧度，压不了任务方向性错位（论文论点）
+base: e1_natural.yaml
+
+experiment:
+  name: e5_fedasync
+  output_dir: runs/e5/fedasync
+
+server:
+  aggregation:
+    name: fedasync
+    staleness_lambda: 0.3
+    min_weight: 0.1
+    server_lr: 1.0

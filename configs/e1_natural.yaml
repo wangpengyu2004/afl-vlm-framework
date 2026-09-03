@@ -1,0 +1,11 @@
+# E1 master run：V 系列全过之后的正式主设定 = v1_natural 拉长到 12 轮
+# （108 条更新；E2 矢量分析 / E3 过渡动力学 / E5 baseline 全部挂在这套设定上）
+# 运行: python -m scripts.run_train --config configs/e1_natural.yaml
+base: v1_natural.yaml
+
+experiment:
+  name: e1_natural
+  output_dir: runs/e1_natural
+
+clients:
+  num_rounds: 12               # 9 客户端 × 12 轮 = 108 条更新（每任务 36 条）

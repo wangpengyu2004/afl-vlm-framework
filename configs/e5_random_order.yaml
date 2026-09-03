@@ -1,0 +1,14 @@
+# E5-8：random_order —— 同批等权但批内随机序（fixed_order/random, batch=9）
+# 顺序效应对照组：与 immediate_fifo 同权重同批次粒度，唯一差别 = 批内排列
+base: e1_natural.yaml
+
+experiment:
+  name: e5_random_order
+  output_dir: runs/e5/random_order
+
+server:
+  aggregation:
+    name: fixed_order
+    batch_size: 9              # 攒满 9 条一批（≈ 每任务 3 条/批）
+    order: {mode: random, seed: 123}
+    server_lr: 1.0

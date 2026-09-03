@@ -1,0 +1,16 @@
+# E5-5：fedcompass —— FedCompass（arXiv:2309.14675）时间变化 staleness 阈值
+# 策略层近似：阈值准入 + 整批施加（客户端侧超量供给 ρ 不在模拟范围）
+base: e1_natural.yaml
+
+experiment:
+  name: e5_fedcompass
+  output_dir: runs/e5/fedcompass
+
+server:
+  aggregation:
+    name: fedcompass
+    theta0: 1.0
+    theta_growth: 0.0025
+    theta_max: 6.0
+    min_count: 3
+    server_lr: 1.0

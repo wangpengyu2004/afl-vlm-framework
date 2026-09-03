@@ -13,6 +13,9 @@ from .base import AggregationPolicy, ServerState, UpdateRecord
 from .immediate_fifo import ImmediateFifoPolicy
 from .fedbuff import FedBuffPolicy
 from .staleness_weighted import StalenessWeightedPolicy
+from .fedasync import FedAsyncPolicy
+from .fedcompass import FedCompassPolicy
+from .sync_avg import SyncAvgPolicy
 from .fixed_order import FixedOrderPolicy
 
 
@@ -28,6 +31,20 @@ def build_policy(agg_cfg) -> AggregationPolicy:
             staleness_lambda=agg_cfg.staleness_lambda,
             min_weight=agg_cfg.min_weight,
         )
+    if name == "fedasync":
+        return FedAsyncPolicy(
+            staleness_lambda=agg_cfg.staleness_lambda,
+            min_weight=agg_cfg.min_weight,
+        )
+    if name == "fedcompass":
+        return FedCompassPolicy(
+            theta0=agg_cfg.theta0,
+            theta_growth=agg_cfg.theta_growth,
+            theta_max=agg_cfg.theta_max,
+            min_count=agg_cfg.min_count,
+        )
+    if name == "sync_avg":
+        return SyncAvgPolicy()
     if name == "fixed_order":
         return FixedOrderPolicy(batch_size=agg_cfg.batch_size, order=agg_cfg.order)
     raise ValueError(f"未注册的聚合策略: {name}")
@@ -36,5 +53,6 @@ def build_policy(agg_cfg) -> AggregationPolicy:
 __all__ = [
     "AggregationPolicy", "UpdateRecord", "ServerState",
     "build_policy",
-    "ImmediateFifoPolicy", "FedBuffPolicy", "StalenessWeightedPolicy", "FixedOrderPolicy",
+    "ImmediateFifoPolicy", "FedBuffPolicy", "StalenessWeightedPolicy",
+    "FedAsyncPolicy", "FedCompassPolicy", "SyncAvgPolicy", "FixedOrderPolicy",
 ]

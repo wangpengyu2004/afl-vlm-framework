@@ -1,0 +1,7 @@
+# E5-1：immediate_fifo —— FedAsync 原始形态（到达即施加、等权、FIFO 序）
+# 也就是 V1/E1 的聚合策略本身；放进矩阵作为"零干预异步"参照
+base: e1_natural.yaml
+
+experiment:
+  name: e5_immediate_fifo
+  output_dir: runs/e5/immediate_fifo

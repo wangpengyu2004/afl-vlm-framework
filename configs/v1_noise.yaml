@@ -1,0 +1,25 @@
+# V1 附加工件（--noise）：硬件噪声臂——natural 的任务→时长链接保留，但每客户端
+# 叠加 ±10% 算力抖动、随机启动偏移、对数正态网络延迟。
+# 用途：排除"震荡只是理想时间线的伪影"——噪声下聚集结构与震荡仍应存在
+# 运行: python -m scripts.run_vseries --stage v1 --noise
+base: v1_natural.yaml
+
+experiment:
+  name: v1_noise
+  output_dir: runs/v1/noise
+
+clients:
+  overrides:
+    # speed_factor 抖动（虚拟时长 = train_seconds/speed_factor）+ 启动错开 + 网络延迟
+    - {id: c0, speed_factor: 1.10, start_offset: 0.0,  net_delay: {dist: lognormal, mu: 0.2, sigma: 0.3}}
+    - {id: c1, speed_factor: 0.95, start_offset: 12.0, net_delay: {dist: lognormal, mu: 0.1, sigma: 0.3}}
+    - {id: c2, speed_factor: 1.05, start_offset: 5.0,  net_delay: {dist: lognormal, mu: 0.3, sigma: 0.4}}
+    - {id: c3, speed_factor: 0.90, start_offset: 3.0,  net_delay: {dist: lognormal, mu: 0.4, sigma: 0.4}}
+    - {id: c4, speed_factor: 1.08, start_offset: 20.0, net_delay: {dist: lognormal, mu: 0.2, sigma: 0.3}}
+    - {id: c5, speed_factor: 0.97, start_offset: 8.0,  net_delay: {dist: lognormal, mu: 0.3, sigma: 0.3}}
+    - {id: c6, speed_factor: 1.02, start_offset: 15.0, net_delay: {dist: lognormal, mu: 0.2, sigma: 0.4}}
+    - {id: c7, speed_factor: 0.92, start_offset: 1.0,  net_delay: {dist: lognormal, mu: 0.5, sigma: 0.3}}
+    - {id: c8, speed_factor: 1.06, start_offset: 25.0, net_delay: {dist: lognormal, mu: 0.1, sigma: 0.3}}
+
+server:
+  probe_on_apply: false        # 噪声臂不做 delta 级探针（V1 结构验证用）

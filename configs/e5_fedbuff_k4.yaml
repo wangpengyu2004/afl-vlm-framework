@@ -1,0 +1,12 @@
+# E5-4：fedbuff K=4 —— FedBuff（Nguyen et al. 2022）缓冲并发聚合
+base: e1_natural.yaml
+
+experiment:
+  name: e5_fedbuff_k4
+  output_dir: runs/e5/fedbuff_k4
+
+server:
+  aggregation:
+    name: fedbuff
+    K: 4
+    server_lr: 1.0

@@ -1,0 +1,13 @@
+# E5-3：fedasync λ=0.5 —— 更激进的降权（敏感性对照：降权再狠也不含任务方向信息）
+base: e1_natural.yaml
+
+experiment:
+  name: e5_fedasync_l05
+  output_dir: runs/e5/fedasync_l05
+
+server:
+  aggregation:
+    name: fedasync
+    staleness_lambda: 0.5
+    min_weight: 0.1
+    server_lr: 1.0

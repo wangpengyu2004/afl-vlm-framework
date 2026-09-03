@@ -1,0 +1,77 @@
+# V1 主配置：natural 到达时间线（任务→时长因果链接保留）7B 虚拟时钟
+# 运行: python -m scripts.run_vseries --stage v1
+#       python -m scripts.run_train --config configs/v1_natural.yaml --dry-run  # 只看调度表
+#
+# 前置：data/pilot/（prepare_datasets）+ task_profiles 经 v0b 标定校准
+#（v0b 会打印建议值；默认 600/1200/700 是 GQA/OCR-VQA/COCO 的先验估计）
+# 臂 A（本配置）：OCR 慢 → 到达按任务自然成块；臂 B（v1_shuffled）拉丁方打乱时长
+experiment:
+  name: v1_natural
+  seed: 42
+  output_dir: runs/v1/natural
+  timing: virtual
+
+model:
+  name: qwen2.5-vl-7b
+  dtype: bf16
+  device: cuda:0
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    include_visual: false
+  gradient_checkpointing: true
+
+tasks:
+  vqa:
+    source:
+      type: local_json
+      json_path: data/pilot/vqa.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256              # 与 prepare_datasets --max-eval 对齐（probe_manifest 依赖）
+  ocr:
+    source:
+      type: local_json
+      json_path: data/pilot/ocr.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256
+  caption:
+    source:
+      type: local_json
+      json_path: data/pilot/caption.json
+      image_root: data/pilot/images
+    eval_ratio: 0.1
+    max_train: 3000
+    max_eval: 256
+
+clients:
+  task_mix: {vqa: 3, ocr: 3, caption: 3}     # Pilot/FedMIT：9 客户端 3/3/3
+  num_rounds: 4                              # 36 条更新，足够看聚集结构
+  speed_factor: 1.0
+  net_delay: {dist: fixed, value: 0}         # V1 隔离"时长差"单一变量；噪声臂见 v1_noise
+  delay_mode: wallclock
+  data_partition: disjoint                   # Pilot 协议：每任务随机均分 3 份
+  client_lr: 1.0e-4
+  batch_size: 2
+  grad_clip: 1.0
+  # natural 时间线：任务决定时长（OCR 图片密集最慢）→ 到达按任务聚集
+  train_seconds: 700
+  task_profiles:
+    vqa:     {train_seconds: 600}            # ← 用 v0b 标定的建议值更新
+    ocr:     {train_seconds: 1200}
+    caption: {train_seconds: 700}
+
+server:
+  aggregation: {name: immediate_fifo, server_lr: 1.0}   # 到达即施加（等权）→ 露出原始时间线
+  eval_every_batches: 1                      # 每次施加后测分任务能力 → 震荡曲线（V1 核心）
+  gen_every_batches: 10                      # 生成评估降频（loss 评估每批、生成每 10 批）
+  eval_batch_size: 4
+  gen_eval_samples: 8
+  max_new_tokens: 32
+  probe_on_apply: true                       # I3 插桩：delta 级三任务探针（V2 数据源）
+  probe_manifest: data/pilot/probe_manifest.json
+  probe_n: 128

@@ -107,6 +107,20 @@ def main() -> None:
     for t in tasks.values():
         print(f"[setup] {t}")
 
+    # 客户端训练数据视图：shared=同任务共用全量；disjoint=每任务随机均分互斥子集
+    # （Pilot/FedMIT 协议；评估集始终共享）
+    client_cfgs = cfg.clients.expand()
+    task_views = {cc["id"]: tasks[cc["task"]] for cc in client_cfgs}
+    if cfg.clients.data_partition == "disjoint":
+        from collections import Counter
+        counts = Counter(cc["task"] for cc in client_cfgs)
+        ordinals: Counter = Counter()
+        for cc in client_cfgs:
+            task_views[cc["id"]] = tasks[cc["task"]].client_view(
+                ordinals[cc["task"]], counts[cc["task"]], cfg.seed)
+            ordinals[cc["task"]] += 1
+        print(f"[setup] data_partition=disjoint（每任务 {dict(counts)} 个互斥子集）")
+
     policy = build_policy(cfg.server.aggregation)
     server = AsyncServer(cfg, manager, policy, tasks, collator, plan=plan)
     dump_config(cfg, f"{cfg.output_dir}/config.used.yaml")
@@ -117,9 +131,9 @@ def main() -> None:
         print(f"[setup] 调度表已写入 {cfg.output_dir}/plan.json")
 
     threads = [
-        ClientThread(cc, tasks[cc["task"]], manager, server, cfg,
+        ClientThread(cc, task_views[cc["id"]], manager, server, cfg,
                      plan_rounds=(plan.rounds_of(cc["id"]) if plan else None))
-        for cc in cfg.clients.expand()
+        for cc in client_cfgs
     ]
     for t in threads:
         t.start()

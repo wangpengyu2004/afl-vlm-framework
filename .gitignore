@@ -24,6 +24,7 @@ data/
 # IDE / 系统
 .idea/
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
 
