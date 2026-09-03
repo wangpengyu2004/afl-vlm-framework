@@ -52,18 +52,36 @@ clients:
   task_mix: {vqa: 3, ocr: 3, caption: 3}     # Pilot/FedMIT：9 客户端 3/3/3
   num_rounds: 4                              # 36 条更新，足够看聚集结构
   speed_factor: 1.0
-  net_delay: {dist: fixed, value: 0}         # V1 隔离"时长差"单一变量；噪声臂见 v1_noise
+  net_delay: {dist: lognormal, mu: 0.0, sigma: 0.3}   # 每次上传独立采样 → 同任务客户端实现值也不同
   delay_mode: wallclock
   data_partition: disjoint                   # Pilot 协议：每任务随机均分 3 份
   client_lr: 1.0e-4
   batch_size: 2
   grad_clip: 1.0
-  # natural 时间线：任务决定时长（OCR 图片密集最慢）→ 到达按任务聚集
+  # 到达时间线 = 两层结构：
+  #   任务层（被检验的因果链接）：task_profiles 的 train_seconds 600/1200/700
+  #     → 到达按任务"软成块"（同任务客户端因算力差错开、跨轮可与相邻任务重叠）
+  #   客户端层（同任务异构，防"孪生客户端同时到达"伪影）：
+  #     speed_factor ±5%（下overrides）+ net_delay 对数正态抖动
+  #     有效时长例：vqa 571–625s / caption 673–722s → 任务间隙 ≥45s 仍远大于抖动
+  # 注意：v1_shuffled 镜像同一组 speed_factor（只换 train_seconds 拉丁方），
+  # 两臂客户端层参数完全一致 → A/B 差异只能来自任务→时长的排列方式
   train_seconds: 700
   task_profiles:
-    vqa:     {train_seconds: 600}            # ← 用 v0b 标定的建议值更新
+    vqa:     {train_seconds: 600}            # ← 任务级名义时长，用 v0b 标定值更新
     ocr:     {train_seconds: 1200}
     caption: {train_seconds: 700}
+  overrides:
+    # 算力异构（虚拟单轮时长 = train_seconds / speed_factor；跨轮恒定）
+    - {id: c0, speed_factor: 1.00}   # vqa
+    - {id: c1, speed_factor: 1.05}
+    - {id: c2, speed_factor: 0.96}
+    - {id: c3, speed_factor: 0.95}   # ocr
+    - {id: c4, speed_factor: 1.03}
+    - {id: c5, speed_factor: 0.98}
+    - {id: c6, speed_factor: 0.97}   # caption
+    - {id: c7, speed_factor: 1.04}
+    - {id: c8, speed_factor: 0.99}
 
 server:
   aggregation: {name: immediate_fifo, server_lr: 1.0}   # 到达即施加（等权）→ 露出原始时间线

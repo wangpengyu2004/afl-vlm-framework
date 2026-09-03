@@ -111,6 +111,13 @@ python -m scripts.run_e5 --seeds 42,43,44
 臂 B（`v1_shuffled`）用拉丁方把 600/700/1200s 打乱到 9 个客户端、边缘分布不变、
 打断"任务→时长"因果链接——natural 与 shuffled 的全部差异只能来自到达结构。
 
+到达时间线是**两层结构**：任务层（`task_profiles` 的时长差，被检验的因果链接）+
+客户端层（同任务异构：`overrides` 的 `speed_factor` ±5% 算力差 + lognormal
+`net_delay` 网络抖动）。同任务客户端到达时刻因此互相错开、跨轮可与相邻任务
+重叠（"软成块"而非理想块状），但任务间隙（≥45s）远大于客户端层抖动。
+客户端层参数在 natural/shuffled 两臂**完全镜像**（v1_shuffled 逐客户端复写同一组
+`speed_factor`，`net_delay` 继承同一分布）——A/B 差异仍只能归因于任务→时长的排列。
+
 ## E5 baseline 矩阵（只换聚合，其余全同 e1_natural）
 
 | 配置 | 策略 | 对应文献 |

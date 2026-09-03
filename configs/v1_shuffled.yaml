@@ -9,17 +9,20 @@ experiment:
 
 clients:
   overrides:
+    # train_seconds 拉丁方（打断任务→时长链接）+ **镜像** v1_natural 的 speed_factor：
+    # 客户端层参数两臂一致（同一组算力异构 + 继承同一 net_delay 分布），
+    # 唯一系统差异 = 任务级名义时长是否与任务绑定 → A/B 差异只能归因于到达结构
     # 客户端序：c0-c2=vqa, c3-c5=ocr, c6-c8=caption（task_mix 展开顺序）
-    # 拉丁方：每行（任务组）三个时长各出现一次，全体边缘分布与 natural 相同
-    - {id: c0, train_seconds: 600}
-    - {id: c1, train_seconds: 700}
-    - {id: c2, train_seconds: 1200}
-    - {id: c3, train_seconds: 1200}
-    - {id: c4, train_seconds: 600}
-    - {id: c5, train_seconds: 700}
-    - {id: c6, train_seconds: 700}
-    - {id: c7, train_seconds: 1200}
-    - {id: c8, train_seconds: 600}
+    # 拉丁方：每行（任务组）三个时长各出现一次，全体名义时长边缘分布与 natural 相同
+    - {id: c0, train_seconds: 600,  speed_factor: 1.00}
+    - {id: c1, train_seconds: 700,  speed_factor: 1.05}
+    - {id: c2, train_seconds: 1200, speed_factor: 0.96}
+    - {id: c3, train_seconds: 1200, speed_factor: 0.95}
+    - {id: c4, train_seconds: 600,  speed_factor: 1.03}
+    - {id: c5, train_seconds: 700,  speed_factor: 0.98}
+    - {id: c6, train_seconds: 700,  speed_factor: 0.97}
+    - {id: c7, train_seconds: 1200, speed_factor: 1.04}
+    - {id: c8, train_seconds: 600,  speed_factor: 0.99}
 
 server:
   probe_on_apply: false        # 对照臂不需要 delta 级探针（V2 只用 natural），省一半探针开销
